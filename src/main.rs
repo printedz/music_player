@@ -48,6 +48,28 @@ impl eframe::App for MusicPlayer {
         // Request continuous repainting to update the UI
         ctx.request_repaint();
 
+        // Check if music has finished playing
+        if self.is_playing {
+            if let Some(sink) = &self.sink {
+                if sink.empty() {
+                    // Music has finished playing, reset player state
+                    self.is_playing = false;
+                    self.playback_start_time = None;
+                    self.accumulated_time = Duration::from_secs(0);
+
+                    // Reset position
+                    if let Ok(mut pos) = self.current_position.lock() {
+                        // If we have a duration, set to total duration (end of track)
+                        if let Some(duration) = self.total_duration {
+                            *pos = duration;
+                        } else {
+                            *pos = Duration::from_secs(0);
+                        }
+                    }
+                }
+            }
+        }
+
         // Update current position if playing
         if self.is_playing {
             if let Some(start_time) = self.playback_start_time {
@@ -227,8 +249,8 @@ impl MusicPlayer {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 100.0])
-            .with_min_inner_size([300.0, 100.0])
+            .with_inner_size([400.0, 150.0])
+            .with_min_inner_size([300.0, 150.0])
             .with_resizable(true), // Prevent window resizing
         ..Default::default()
     };
