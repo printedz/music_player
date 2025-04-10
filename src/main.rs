@@ -225,7 +225,14 @@ impl MusicPlayer {
 }
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([400.0, 100.0])
+            .with_min_inner_size([300.0, 100.0])
+            .with_resizable(true), // Prevent window resizing
+        ..Default::default()
+    };
+
     eframe::run_native(
         "Music Player",
         native_options,
