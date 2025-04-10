@@ -156,7 +156,15 @@ impl eframe::App for MusicPlayer {
             // Volume control
             ui.horizontal(|ui| {
                 ui.label("Volume:");
-                if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0)).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                            .text("%")
+                            .custom_formatter(|value, _| {
+                                format!("{:.0}%", value * 100.0)
+                            })
+                    )
+                    .changed() {
                     if let Some(sink) = &self.sink {
                         sink.set_volume(self.volume);
                     }
@@ -249,9 +257,9 @@ impl MusicPlayer {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 150.0])
+            .with_inner_size([400.0, 159.0])
             .with_min_inner_size([300.0, 150.0])
-            .with_resizable(true), // Prevent window resizing
+            .with_resizable(false), // Prevent window resizing
         ..Default::default()
     };
 
