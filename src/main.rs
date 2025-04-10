@@ -17,6 +17,7 @@ struct MusicPlayer {
     current_position: Arc<Mutex<Duration>>,
     total_duration: Option<Duration>,
     playback_start_time: Option<Instant>,
+    accumulated_time: Duration,  // Track accumulated time during pauses
     is_playing: bool,
     volume: f32,
 }
@@ -35,6 +36,7 @@ impl Default for MusicPlayer {
             current_position: Arc::new(Mutex::new(Duration::from_secs(0))),
             total_duration: None,
             playback_start_time: None,
+            accumulated_time: Duration::from_secs(0),
             is_playing: false,
             volume: 0.5,
         }
@@ -49,9 +51,11 @@ impl eframe::App for MusicPlayer {
         // Update current position if playing
         if self.is_playing {
             if let Some(start_time) = self.playback_start_time {
-                let elapsed = start_time.elapsed();
+                let current_segment_time = start_time.elapsed();
+                let total_elapsed = self.accumulated_time + current_segment_time;
+
                 if let Ok(mut pos) = self.current_position.lock() {
-                    *pos = elapsed;
+                    *pos = total_elapsed;
                 }
             }
         }
@@ -82,7 +86,12 @@ impl eframe::App for MusicPlayer {
                         if let Some(sink) = &self.sink {
                             sink.pause();
                             self.is_playing = false;
-                            self.playback_start_time = None;
+
+                            // Save accumulated time when pausing
+                            if let Some(start_time) = self.playback_start_time {
+                                self.accumulated_time += start_time.elapsed();
+                                self.playback_start_time = None;
+                            }
                         }
                     }
                 } else {
@@ -90,6 +99,7 @@ impl eframe::App for MusicPlayer {
                         if let Some(sink) = &self.sink {
                             sink.play();
                             self.is_playing = true;
+                            // Start counting from now, but keep the accumulated time
                             self.playback_start_time = Some(Instant::now());
                         }
                     }
@@ -100,6 +110,7 @@ impl eframe::App for MusicPlayer {
                         sink.stop();
                         self.is_playing = false;
                         self.playback_start_time = None;
+                        self.accumulated_time = Duration::from_secs(0);
 
                         // Reset position
                         if let Ok(mut pos) = self.current_position.lock() {
@@ -173,10 +184,11 @@ impl MusicPlayer {
         // Get duration of track
         self.estimate_track_duration(&path);
 
-        // Reset current position
+        // Reset current position and accumulated time
         if let Ok(mut pos) = self.current_position.lock() {
             *pos = Duration::from_secs(0);
         }
+        self.accumulated_time = Duration::from_secs(0);
 
         self.load_file(&path);
         self.current_track = Some(path);
