@@ -134,15 +134,16 @@ impl eframe::App for MusicPlayer {
                 // Convert volume to percentage for display
                 let mut volume_percent = self.volume * 100.0;
                 if ui.add(egui::Slider::new(&mut volume_percent, 0.0..=100.0)
-                    .suffix("%"))
-                    .changed() {
+                    .suffix("%")
+                    .trailing_fill(true))  // Call trailing_fill on Slider, not on Response
+                    .changed()
                     // Convert percentage back to 0.0-1.0 range
-                    self.volume = volume_percent / 100.0;
+                    { self.volume = volume_percent / 100.0; }
                     if let Some(sink) = &self.sink {
                         sink.set_volume(self.volume);
                     }
                 }
-            });
+            );
 
             // Show track info
             if let Some(path) = &self.current_track {
