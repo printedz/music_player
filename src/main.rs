@@ -128,10 +128,16 @@ impl eframe::App for MusicPlayer {
                 }
             });
 
-            // Volume slider
+            // Volume slider (modified to show 0% to 100%)
             ui.horizontal(|ui| {
                 ui.label("Volume:");
-                if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0)).changed() {
+                // Convert volume to percentage for display
+                let mut volume_percent = self.volume * 100.0;
+                if ui.add(egui::Slider::new(&mut volume_percent, 0.0..=100.0)
+                    .suffix("%"))
+                    .changed() {
+                    // Convert percentage back to 0.0-1.0 range
+                    self.volume = volume_percent / 100.0;
                     if let Some(sink) = &self.sink {
                         sink.set_volume(self.volume);
                     }
