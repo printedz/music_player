@@ -314,7 +314,7 @@ impl MusicPlayer {
 
 fn main() -> eframe::Result<()> {
     let mut options = eframe::NativeOptions::default();
-    options.viewport.inner_size = Some(egui::vec2(400.0, 200.0));
+    options.viewport.inner_size = Some(egui::vec2(400.0, 175.0));
 
     eframe::run_native(
         "Music Player",
