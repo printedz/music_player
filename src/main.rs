@@ -19,6 +19,8 @@ struct MusicPlayer {
     accumulated_time: Duration,
     is_playing: bool,
     volume: f32,
+    // New field to track position during slider drag
+    slider_position: Option<Duration>,
 }
 
 impl Default for MusicPlayer {
@@ -37,6 +39,7 @@ impl Default for MusicPlayer {
             accumulated_time: Duration::from_secs(0),
             is_playing: false,
             volume: 1.0,
+            slider_position: None,
         }
     }
 }
@@ -146,10 +149,18 @@ impl eframe::App for MusicPlayer {
                 ui.label(format!("Playing: {}", file_name));
 
                 if let Some(total_duration) = self.total_duration {
+                    // Get the current position to display
+                    let display_position = if let Some(slider_pos) = self.slider_position {
+                        // If slider is being dragged, show slider position
+                        slider_pos
+                    } else {
+                        // Otherwise show actual playback position
+                        *self.current_position.lock().unwrap()
+                    };
+
                     // Format current position and total duration as MM:SS
-                    let current = *self.current_position.lock().unwrap();
-                    let current_mins = current.as_secs() / 60;
-                    let current_secs = current.as_secs() % 60;
+                    let current_mins = display_position.as_secs() / 60;
+                    let current_secs = display_position.as_secs() % 60;
                     let total_mins = total_duration.as_secs() / 60;
                     let total_secs = total_duration.as_secs() % 60;
 
@@ -159,8 +170,10 @@ impl eframe::App for MusicPlayer {
                     ));
 
                     // Playback slider
-                    let mut current_secs = current.as_secs_f32();
                     let total_secs = total_duration.as_secs_f32();
+
+                    // Convert position to seconds for the slider
+                    let mut current_secs = display_position.as_secs_f32();
 
                     let slider_response = ui.add(
                         egui::Slider::new(&mut current_secs, 0.0..=total_secs)
@@ -168,10 +181,39 @@ impl eframe::App for MusicPlayer {
                             .trailing_fill(true)
                     );
 
-                    // Only seek when the user releases the slider or clicks on it
-                    if slider_response.drag_stopped() || slider_response.clicked() {
-                        // Convert back to Duration
+                    // Update the displayed position during dragging without seeking
+                    if slider_response.dragged() {
+                        self.slider_position = Some(Duration::from_secs_f32(current_secs));
+                    }
+
+                    // Only seek in the file when the drag stops
+                    if slider_response.drag_stopped() {
                         let new_position = Duration::from_secs_f32(current_secs);
+
+                        // Clear the temporary slider position
+                        self.slider_position = None;
+
+                        // If playing, stop current playback and restart at new position
+                        if let Some(track_path) = self.current_track.clone() {
+                            if self.is_playing {
+                                if let Some(sink) = &self.sink {
+                                    sink.stop();
+                                }
+                                self.load_file_with_seek(&track_path, new_position);
+                            } else {
+                                // Just update the position if not playing
+                                self.accumulated_time = new_position;
+                                *self.current_position.lock().unwrap() = new_position;
+                            }
+                        }
+                    }
+
+                    // Handle clicks directly on the slider (not dragging)
+                    if slider_response.clicked() && !slider_response.dragged() {
+                        let new_position = Duration::from_secs_f32(current_secs);
+
+                        // Clear the temporary slider position
+                        self.slider_position = None;
 
                         // If playing, stop current playback and restart at new position
                         if let Some(track_path) = self.current_track.clone() {
@@ -208,6 +250,7 @@ impl MusicPlayer {
         *self.current_position.lock().unwrap() = Duration::from_secs(0);
         self.playback_start_time = None;
         self.is_playing = false;
+        self.slider_position = None;
 
         // Estimate track duration
         self.estimate_track_duration(&path);
