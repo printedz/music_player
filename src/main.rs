@@ -1,13 +1,12 @@
-use std::{
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rfd::FileDialog;
 
 struct MusicPlayer {
     sink: Option<Sink>,
@@ -17,19 +16,18 @@ struct MusicPlayer {
     current_position: Arc<Mutex<Duration>>,
     total_duration: Option<Duration>,
     playback_start_time: Option<Instant>,
-    accumulated_time: Duration,  // Track accumulated time during pauses
+    accumulated_time: Duration,
     is_playing: bool,
     volume: f32,
 }
 
 impl Default for MusicPlayer {
     fn default() -> Self {
+        // Create audio stream
         let (stream, stream_handle) = OutputStream::try_default().unwrap();
-        let sink = Sink::try_new(&stream_handle).unwrap();
-        sink.set_volume(0.5);
 
         Self {
-            sink: Some(sink),
+            sink: None,
             _stream: Some(stream),
             _stream_handle: Some(stream_handle),
             current_track: None,
@@ -38,216 +36,233 @@ impl Default for MusicPlayer {
             playback_start_time: None,
             accumulated_time: Duration::from_secs(0),
             is_playing: false,
-            volume: 0.5,
+            volume: 1.0,
         }
     }
 }
 
 impl eframe::App for MusicPlayer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Request continuous repainting to update the UI
-        ctx.request_repaint();
-
-        // Check if music has finished playing
-        if self.is_playing {
-            if let Some(sink) = &self.sink {
-                if sink.empty() {
-                    // Music has finished playing, reset player state
-                    self.is_playing = false;
-                    self.playback_start_time = None;
-                    self.accumulated_time = Duration::from_secs(0);
-
-                    // Reset position
-                    if let Ok(mut pos) = self.current_position.lock() {
-                        // If we have a duration, set to total duration (end of track)
-                        if let Some(duration) = self.total_duration {
-                            *pos = duration;
-                        } else {
-                            *pos = Duration::from_secs(0);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Update current position if playing
-        if self.is_playing {
-            if let Some(start_time) = self.playback_start_time {
-                let current_segment_time = start_time.elapsed();
-                let total_elapsed = self.accumulated_time + current_segment_time;
-
-                if let Ok(mut pos) = self.current_position.lock() {
-                    *pos = total_elapsed;
-                }
-            }
-        }
-
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Music Player");
 
-            // Current track display
-            if let Some(path) = &self.current_track {
-                ui.label(format!("Now playing: {}", path.file_name().unwrap().to_string_lossy()));
-            } else {
-                ui.label("No track selected");
+            // Update current position based on playback time
+            if self.is_playing {
+                if let Some(start_time) = self.playback_start_time {
+                    let elapsed = start_time.elapsed();
+                    let current_pos = self.accumulated_time + elapsed;
+                    *self.current_position.lock().unwrap() = current_pos;
+
+                    // Check if we've reached the end of the track
+                    if let Some(total) = self.total_duration {
+                        if current_pos >= total {
+                            self.is_playing = false;
+                            self.accumulated_time = Duration::from_secs(0);
+                            *self.current_position.lock().unwrap() = Duration::from_secs(0);
+                            self.playback_start_time = None;
+
+                            if let Some(sink) = &self.sink {
+                                sink.stop();
+                            }
+                        }
+                    }
+                }
             }
 
-            // Player controls
+            // File selection button
+            if ui.button("Open File").clicked() {
+                if let Some(path) = FileDialog::new()
+                    .add_filter("Audio", &["mp3", "wav", "ogg", "flac"])
+                    .pick_file()
+                {
+                    self.load_track(path);
+                }
+            }
+
             ui.horizontal(|ui| {
-                if ui.button("Open").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Audio", &["mp3", "wav", "flac", "ogg"])
-                        .pick_file()
-                    {
-                        self.load_track(path);
-                    }
-                }
-
-                if self.is_playing {
-                    if ui.button("⏸ Pause").clicked() {
-                        if let Some(sink) = &self.sink {
-                            sink.pause();
-                            self.is_playing = false;
-
-                            // Save accumulated time when pausing
-                            if let Some(start_time) = self.playback_start_time {
-                                self.accumulated_time += start_time.elapsed();
-                                self.playback_start_time = None;
+                // Play/Pause button
+                if self.current_track.is_some() {
+                    let button_text = if self.is_playing { "Pause" } else { "Play" };
+                    if ui.button(button_text).clicked() {
+                        if self.is_playing {
+                            // Pause playback
+                            if let Some(sink) = &self.sink {
+                                sink.pause();
+                                if let Some(start_time) = self.playback_start_time {
+                                    self.accumulated_time += start_time.elapsed();
+                                    self.playback_start_time = None;
+                                }
+                                self.is_playing = false;
+                            }
+                        } else {
+                            // Resume or start playback
+                            if let Some(sink) = &self.sink {
+                                if self.accumulated_time == Duration::from_secs(0) {
+                                    // Fresh playback
+                                    if let Some(path) = self.current_track.clone() {
+                                        self.load_file(&path);
+                                    }
+                                } else {
+                                    // Resume from paused position
+                                    sink.play();
+                                    self.playback_start_time = Some(Instant::now());
+                                    self.is_playing = true;
+                                }
                             }
                         }
                     }
-                } else {
-                    if ui.button("▶ Play").clicked() {
-                        if let Some(sink) = &self.sink {
-                            sink.play();
-                            self.is_playing = true;
-                            // Start counting from now, but keep the accumulated time
-                            self.playback_start_time = Some(Instant::now());
-                        }
-                    }
-                }
 
-                if ui.button("⏹ Stop").clicked() {
-                    if let Some(sink) = &self.sink {
-                        sink.stop();
+                    // Stop button
+                    if ui.button("Stop").clicked() {
+                        if let Some(sink) = &self.sink {
+                            sink.stop();
+                        }
                         self.is_playing = false;
-                        self.playback_start_time = None;
                         self.accumulated_time = Duration::from_secs(0);
-
-                        // Reset position
-                        if let Ok(mut pos) = self.current_position.lock() {
-                            *pos = Duration::from_secs(0);
-                        }
-
-                        // Recreate sink
-                        if let Some(stream_handle) = &self._stream_handle {
-                            self.sink = Some(Sink::try_new(stream_handle).unwrap());
-                            self.sink.as_mut().unwrap().set_volume(self.volume);
-
-                            // Clone the path if there is one
-                            if let Some(path) = self.current_track.clone() {
-                                self.load_file(&path);
-                            }
-                        }
+                        *self.current_position.lock().unwrap() = Duration::from_secs(0);
+                        self.playback_start_time = None;
                     }
                 }
             });
 
-            // Volume control
+            // Volume slider
             ui.horizontal(|ui| {
                 ui.label("Volume:");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.volume, 0.0..=1.0)
-                            .text("%")
-                            .custom_formatter(|value, _| {
-                                format!("{:.0}%", value * 100.0)
-                            })
-                    )
-                    .changed() {
+                if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0)).changed() {
                     if let Some(sink) = &self.sink {
                         sink.set_volume(self.volume);
                     }
                 }
             });
 
-            // Progress bar with actual progress
-            if let Some(_) = &self.current_track {
-                let progress = if let (Some(total), Ok(current)) = (self.total_duration, self.current_position.lock()) {
-                    if total.as_secs() > 0 {
-                        current.as_secs_f32() / total.as_secs_f32()
-                    } else {
-                        0.0
+            // Show track info
+            if let Some(path) = &self.current_track {
+                ui.separator();
+
+                let file_name = path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Unknown");
+
+                ui.label(format!("Playing: {}", file_name));
+
+                if let Some(total_duration) = self.total_duration {
+                    // Format current position and total duration as MM:SS
+                    let current = *self.current_position.lock().unwrap();
+                    let current_mins = current.as_secs() / 60;
+                    let current_secs = current.as_secs() % 60;
+                    let total_mins = total_duration.as_secs() / 60;
+                    let total_secs = total_duration.as_secs() % 60;
+
+                    ui.label(format!(
+                        "{:02}:{:02} / {:02}:{:02}",
+                        current_mins, current_secs, total_mins, total_secs
+                    ));
+
+                    // Playback slider
+                    let mut current_secs = current.as_secs_f32();
+                    let total_secs = total_duration.as_secs_f32();
+
+                    let slider_response = ui.add(
+                        egui::Slider::new(&mut current_secs, 0.0..=total_secs)
+                            .show_value(false)
+                            .trailing_fill(true)
+                    );
+
+                    // Only seek when the user releases the slider or clicks on it
+                    if slider_response.drag_stopped() || slider_response.clicked() {
+                        // Convert back to Duration
+                        let new_position = Duration::from_secs_f32(current_secs);
+
+                        // If playing, stop current playback and restart at new position
+                        if let Some(track_path) = self.current_track.clone() {
+                            if self.is_playing {
+                                if let Some(sink) = &self.sink {
+                                    sink.stop();
+                                }
+                                self.load_file_with_seek(&track_path, new_position);
+                            } else {
+                                // Just update the position if not playing
+                                self.accumulated_time = new_position;
+                                *self.current_position.lock().unwrap() = new_position;
+                            }
+                        }
                     }
-                } else {
-                    0.0
-                };
-
-                // Clamp progress to be between 0.0 and 1.0
-                let progress = progress.max(0.0).min(1.0);
-
-                // Display time
-                let current_secs = if let Ok(current) = self.current_position.lock() {
-                    current.as_secs()
-                } else {
-                    0
-                };
-
-                let total_secs = self.total_duration.map_or(0, |d| d.as_secs());
-
-                ui.label(format!("{:02}:{:02} / {:02}:{:02}",
-                                 current_secs / 60, current_secs % 60,
-                                 total_secs / 60, total_secs % 60));
-
-                ui.add(egui::ProgressBar::new(progress).show_percentage());
+                }
             }
         });
+
+        // Request continuous redraw to update progress
+        ctx.request_repaint();
     }
 }
 
 impl MusicPlayer {
     fn load_track(&mut self, path: PathBuf) {
+        // Stop any current playback
         if let Some(sink) = &self.sink {
             sink.stop();
         }
 
-        // Get duration of track
+        self.current_track = Some(path.clone());
+        self.accumulated_time = Duration::from_secs(0);
+        *self.current_position.lock().unwrap() = Duration::from_secs(0);
+        self.playback_start_time = None;
+        self.is_playing = false;
+
+        // Estimate track duration
         self.estimate_track_duration(&path);
 
-        // Reset current position and accumulated time
-        if let Ok(mut pos) = self.current_position.lock() {
-            *pos = Duration::from_secs(0);
-        }
-        self.accumulated_time = Duration::from_secs(0);
-
+        // Start playing the new track
         self.load_file(&path);
-        self.current_track = Some(path);
-        self.is_playing = true;
-        self.playback_start_time = Some(Instant::now());
     }
 
     fn estimate_track_duration(&mut self, path: &Path) {
-        // Try to get duration from the file
+        // This is a simple estimation and might not be accurate for all formats
+        // For more accurate duration, you'd need a dedicated audio metadata library
         if let Ok(file) = File::open(path) {
-            let reader = BufReader::new(file);
-            if let Ok(source) = Decoder::new(reader) {
-                self.total_duration = Some(source.total_duration().unwrap_or(Duration::from_secs(0)));
+            let source = Decoder::new(BufReader::new(file)).ok();
+
+            if let Some(source) = source {
+                if let Some(duration) = source.total_duration() {
+                    self.total_duration = Some(duration);
+                    return;
+                }
             }
         }
+
+        // Fallback duration if we can't determine it
+        self.total_duration = Some(Duration::from_secs(300)); // 5 minutes default
     }
 
     fn load_file(&mut self, path: &Path) {
-        if let Ok(file) = File::open(path) {
-            let reader = BufReader::new(file);
-            if let Ok(source) = Decoder::new(reader) {
-                // Store the duration if available
-                if self.total_duration.is_none() {
-                    self.total_duration = source.total_duration();
-                }
+        self.load_file_with_seek(path, Duration::from_secs(0));
+    }
 
-                if let Some(sink) = &self.sink {
-                    sink.append(source);
-                    sink.play();
+    fn load_file_with_seek(&mut self, path: &Path, position: Duration) {
+        if let Ok(file) = File::open(path) {
+            if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
+                if let Some(stream_handle) = &self._stream_handle {
+                    // Initialize a new sink
+                    if let Ok(sink) = Sink::try_new(stream_handle) {
+                        // Set volume
+                        sink.set_volume(self.volume);
+
+                        // Skip to position if needed
+                        if position > Duration::from_secs(0) {
+                            let skipped_source = decoder.skip_duration(position);
+                            sink.append(skipped_source);
+                        } else {
+                            sink.append(decoder);
+                        }
+
+                        // Start playback
+                        sink.play();
+
+                        self.sink = Some(sink);
+                        self.is_playing = true;
+                        self.accumulated_time = position;
+                        self.playback_start_time = Some(Instant::now());
+                    }
                 }
             }
         }
@@ -255,17 +270,12 @@ impl MusicPlayer {
 }
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 159.0])
-            .with_min_inner_size([300.0, 150.0])
-            .with_resizable(false), // Prevent window resizing
-        ..Default::default()
-    };
+    let mut options = eframe::NativeOptions::default();
+    options.viewport.inner_size = Some(egui::vec2(400.0, 200.0));
 
     eframe::run_native(
         "Music Player",
-        native_options,
+        options,
         Box::new(|_cc| Ok(Box::new(MusicPlayer::default()))),
     )
 }
