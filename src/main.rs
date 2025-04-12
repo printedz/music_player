@@ -217,24 +217,11 @@ impl eframe::App for MusicPlayer {
 
                     // Handle clicks directly on the slider (not dragging)
                     if slider_response.clicked() && !slider_response.dragged() {
-                        let new_position = Duration::from_secs_f32(current_secs);
 
                         // Clear the temporary slider position
                         self.slider_position = None;
 
                         // If playing, stop current playback and restart at new position
-                        if let Some(track_path) = self.current_track.clone() {
-                            if self.is_playing {
-                                if let Some(sink) = &self.sink {
-                                    sink.stop();
-                                }
-                                self.load_file_with_seek(&track_path, new_position);
-                            } else {
-                                // Just update the position if not playing
-                                self.accumulated_time = new_position;
-                                *self.current_position.lock().unwrap() = new_position;
-                            }
-                        }
                     }
                 }
             }
