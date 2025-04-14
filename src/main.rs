@@ -19,7 +19,7 @@ struct MusicPlayer {
     accumulated_time: Duration,
     is_playing: bool,
     volume: f32,
-    // New field to track position during slider drag
+    // Field to track position during slider drag
     slider_position: Option<Duration>,
 }
 
@@ -100,17 +100,12 @@ impl eframe::App for MusicPlayer {
                         } else {
                             // Resume or start playback
                             if let Some(sink) = &self.sink {
-                                if self.accumulated_time == Duration::from_secs(0) {
-                                    // Fresh playback
-                                    if let Some(path) = self.current_track.clone() {
-                                        self.load_file(&path);
-                                    }
-                                } else {
-                                    // Resume from paused position
-                                    sink.play();
-                                    self.playback_start_time = Some(Instant::now());
-                                    self.is_playing = true;
-                                }
+                                sink.stop(); // Stop existing sink to prepare for new position
+                            }
+
+                            // Start playback from current accumulated_time
+                            if let Some(path) = self.current_track.clone() {
+                                self.load_file_with_seek(&path, self.accumulated_time);
                             }
                         }
                     }
@@ -135,15 +130,15 @@ impl eframe::App for MusicPlayer {
                 let mut volume_percent = self.volume * 100.0;
                 if ui.add(egui::Slider::new(&mut volume_percent, 0.0..=100.0)
                     .suffix("%")
-                    .trailing_fill(true))  // Call trailing_fill on Slider, not on Response
-                    .changed()
+                    .trailing_fill(true))
+                    .changed() {
                     // Convert percentage back to 0.0-1.0 range
-                    { self.volume = volume_percent / 100.0; }
+                    self.volume = volume_percent / 100.0;
                     if let Some(sink) = &self.sink {
                         sink.set_volume(self.volume);
                     }
                 }
-            );
+            });
 
             // Show track info
             if let Some(path) = &self.current_track {
@@ -200,28 +195,41 @@ impl eframe::App for MusicPlayer {
                         // Clear the temporary slider position
                         self.slider_position = None;
 
-                        // If playing, stop current playback and restart at new position
-                        if let Some(track_path) = self.current_track.clone() {
-                            if self.is_playing {
+                        // Always update the accumulated_time
+                        self.accumulated_time = new_position;
+                        *self.current_position.lock().unwrap() = new_position;
+
+                        // If currently playing, stop and restart at new position
+                        if self.is_playing {
+                            if let Some(track_path) = self.current_track.clone() {
                                 if let Some(sink) = &self.sink {
                                     sink.stop();
                                 }
                                 self.load_file_with_seek(&track_path, new_position);
-                            } else {
-                                // Just update the position if not playing
-                                self.accumulated_time = new_position;
-                                *self.current_position.lock().unwrap() = new_position;
                             }
                         }
                     }
 
                     // Handle clicks directly on the slider (not dragging)
                     if slider_response.clicked() && !slider_response.dragged() {
+                        let new_position = Duration::from_secs_f32(current_secs);
 
                         // Clear the temporary slider position
                         self.slider_position = None;
 
-                        // If playing, stop current playback and restart at new position
+                        // Always update the accumulated_time
+                        self.accumulated_time = new_position;
+                        *self.current_position.lock().unwrap() = new_position;
+
+                        // If currently playing, stop and restart at new position
+                        if self.is_playing {
+                            if let Some(track_path) = self.current_track.clone() {
+                                if let Some(sink) = &self.sink {
+                                    sink.stop();
+                                }
+                                self.load_file_with_seek(&track_path, new_position);
+                            }
+                        }
                     }
                 }
             }
